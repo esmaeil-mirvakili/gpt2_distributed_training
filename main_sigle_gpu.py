@@ -1,7 +1,10 @@
+import time
+
 import torch
 import torch.nn.functional as F
 from data.data import DataLoaderLite
 from models.gpt2 import GPT2, GPT2Config
+
 
 def eval():
     num_return_sequences = 5
@@ -62,7 +65,10 @@ def train():
     if torch.cuda.is_available():
         torch.cuda.manual_seed(42)
 
-    B, T = 4, 32
+    # change the matmul precision to use TensorFloat32
+    torch.set_float32_matmul_precision('high')
+
+    B, T = 1, 1024
     train_loader = DataLoaderLite(B, T)
 
     model = GPT2(GPT2Config())
@@ -70,6 +76,7 @@ def train():
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-04)
     for i in range(50):
+        t0 = time.time()
         x, y = next(train_loader)
         x = x.to(device)
         y = y.to(device)
@@ -77,7 +84,12 @@ def train():
         logits, loss = model(x, y)
         loss.backward()
         optimizer.step()
-        print(f'Step {i}: loss={loss}')
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()  # for calculating the step time
+        t1 = time.time()
+        dt = (t1 - t0) * 1000
+        token_per_sec = (B * T) / (t1 - t0)
+        print(f'Step {i}: loss={loss}, dt={dt:.2f}ms, tok/sec={token_per_sec:.2f}')
 
 
 if __name__ == '__main__':
