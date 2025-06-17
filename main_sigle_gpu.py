@@ -1,5 +1,5 @@
 import time
-
+import argparse
 import torch
 import torch.nn.functional as F
 from data.data import DataLoaderLite
@@ -53,7 +53,7 @@ def eval():
         print('> ', decoded)
 
 
-def train():
+def train(args):
     device = 'cpu'
     if torch.cuda.is_available():
         device = 'cuda'
@@ -66,7 +66,8 @@ def train():
         torch.cuda.manual_seed(42)
 
     # change the matmul precision to use TensorFloat32
-    torch.set_float32_matmul_precision('high')
+    if args.tf32:
+        torch.set_float32_matmul_precision('high')
 
     B, T = 1, 1024
     train_loader = DataLoaderLite(B, T)
@@ -92,5 +93,12 @@ def train():
         print(f'Step {i}: loss={loss}, dt={dt:.2f}ms, tok/sec={token_per_sec:.2f}')
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="GPT2 Single GPU Training")
+    parser.add_argument('--tf32', action='store_true', default=False, help="Activate TensorFloat32 in NVIDIA GPUs")
+    return parser.parse_args()
+
+
 if __name__ == '__main__':
-    train()
+    args = parse_args()
+    train(args)
