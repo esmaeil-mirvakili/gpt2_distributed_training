@@ -5,6 +5,7 @@ import torch
 import torch.nn.functional as F
 from data.data import DataLoaderLite
 from models.gpt2 import GPT2, GPT2Config
+from trainer.utils import configure_optimizers
 
 
 def eval():
@@ -92,7 +93,7 @@ def train(args):
     warmup_steps = 10
     max_steps = 50
 
-    # cosine learning rate
+    # cosine learning rate scheduler
     def get_lr(it):
         # 1. linear warmup
         if it < warmup_steps:
@@ -108,7 +109,8 @@ def train(args):
         coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
         return min_lr + coeff * (max_lr - min_lr)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-04, betas=(0.9, 0.95), eps=1e-8)
+    # optimizer = torch.optim.AdamW(model.parameters(), lr=3e-04, betas=(0.9, 0.95), eps=1e-8)
+    optimizer = configure_optimizers(model, weight_decay=0.1, learning_rate=64-4, device=device)
     for step in range(50):
         t0 = time.time()
         x, y = next(train_loader)
