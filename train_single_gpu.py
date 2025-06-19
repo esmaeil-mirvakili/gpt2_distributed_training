@@ -77,7 +77,7 @@ def train(args):
     B, T = 1, 1024
     train_loader = DataLoaderLite(B, T)
 
-    model = GPT2(GPT2Config())
+    model = GPT2(GPT2Config(vocab_size=50304))  # 50304 is a nice number => lots of power of 2: 393 * 128
     model.to(device)
 
     # As of now, torch.compile() is not supported on MPS (Apple Metal Performance Shaders)
@@ -86,7 +86,7 @@ def train(args):
         # adds compilation time to the training
         model = torch.compile(model)
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-04)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=3e-04, betas=(0.9, 0.95), eps=1e-8)
     for i in range(50):
         t0 = time.time()
         x, y = next(train_loader)
@@ -97,13 +97,17 @@ def train(args):
             # Some CUDA ops might not be cast: https://docs.pytorch.org/docs/stable/amp.html#cuda-op-specific-behavior
             logits, loss = model(x, y)
         loss.backward()
+        # gradient norm clipping => prevent the model from getting big shocks in terms of gradient magnitude
+        # clip the global norm of the gradient at 1.0 (GPT3 hyperparam)
+        norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # global norm of the params
+
         optimizer.step()
         if torch.cuda.is_available():
             torch.cuda.synchronize()  # for calculating the step time
         t1 = time.time()
         dt = (t1 - t0) * 1000
         token_per_sec = (B * T) / (t1 - t0)
-        print(f'Step {i}: loss={loss}, dt={dt:.2f}ms, tok/sec={token_per_sec:.2f}')
+        print(f'Step {i}: loss={loss} | norm: {norm:.2f} | dt={dt:.2f}ms | tok/sec={token_per_sec:.2f}')
 
 
 def parse_args():
