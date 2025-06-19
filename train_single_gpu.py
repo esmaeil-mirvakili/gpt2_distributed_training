@@ -1,5 +1,6 @@
-import time
 import argparse
+import math
+import time
 import torch
 import torch.nn.functional as F
 from data.data import DataLoaderLite
@@ -86,8 +87,29 @@ def train(args):
         # adds compilation time to the training
         model = torch.compile(model)
 
+    max_lr = 6e-4
+    min_lr = max_lr * 0.1
+    warmup_steps = 10
+    max_steps = 50
+
+    # cosine learning rate
+    def get_lr(it):
+        # 1. linear warmup
+        if it < warmup_steps:
+            # starts at max_lr/warmup_steps goes to max_lr
+            return max_lr * (it + 1) / warmup_steps
+        # 2. if beyond lr_decay_iters, return min_lr
+        if it > max_steps:
+            return min_lr
+        # 3. in between => use cosine decay
+        decay_ratio = (it - warmup_steps) / (max_steps - warmup_steps)
+        assert 0 <= decay_ratio <= 1
+        # starts at 1 goes to 0
+        coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
+        return min_lr + coeff * (max_lr - min_lr)
+
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-04, betas=(0.9, 0.95), eps=1e-8)
-    for i in range(50):
+    for step in range(50):
         t0 = time.time()
         x, y = next(train_loader)
         x = x.to(device)
@@ -101,13 +123,18 @@ def train(args):
         # clip the global norm of the gradient at 1.0 (GPT3 hyperparam)
         norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # global norm of the params
 
+        # learning rate scheduling
+        lr = get_lr(step)
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = lr
+
         optimizer.step()
         if torch.cuda.is_available():
             torch.cuda.synchronize()  # for calculating the step time
         t1 = time.time()
         dt = (t1 - t0) * 1000
         token_per_sec = (B * T) / (t1 - t0)
-        print(f'Step {i}: loss={loss} | norm: {norm:.2f} | dt={dt:.2f}ms | tok/sec={token_per_sec:.2f}')
+        print(f'Step {step}: loss={loss} | norm: {norm:.2f} | dt={dt:.2f}ms | tok/sec={token_per_sec:.2f}')
 
 
 def parse_args():
