@@ -12,6 +12,7 @@ class GPT2Config:
     n_layer: int = 12  # number of layers
     n_head: int = 12  # number of attention heads
     n_embd: int = 768  # embedding dimension
+    use_flash_attn: bool = True  # use flash attention implementation
 
 
 class GPT2(nn.Module):
@@ -152,6 +153,7 @@ class CausalSelfAttention(nn.Module):
         self.n_head = config.n_head
         self.n_embd = config.n_embd
         self.block_size = config.block_size
+        self.use_flash_attn = config.use_flash_attn
         # mask (OpenAI calls it bias)
         self.register_buffer('bias',
                              torch.tril(torch.ones(config.block_size, config.block_size)).view(1, 1, config.block_size,
@@ -170,12 +172,18 @@ class CausalSelfAttention(nn.Module):
         k = k.transpose(1, 2)   # (B, n_head, T, head_dim)
         v = v.view(B, T, self.n_head, self.n_embd // self.n_head)   # (B, T, n_head, head_dim)
         v = v.transpose(1, 2)   # (B, n_head, T, head_dim)
-        attn = (q @ k.transpose(-2, -1))    # (B, n_head, T, T)
-        # normalization
-        attn = attn * (1.0 / math.sqrt(self.n_embd // self.n_head))
-        attn = attn.masked_fill(self.bias[:, :, :T, :T] == 0, float('-inf'))
-        attn = F.softmax(attn, dim=-1)
-        y = attn @ v    # (B, n_head, T, head_dim)
+
+        if self.use_flash_attn:
+            # y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+            y = F.scaled_dot_product_attention(q, k, v, attn_mask=self.bias[:, :, :T, :T] == 0)
+        else:
+            attn = (q @ k.transpose(-2, -1))    # (B, n_head, T, T)
+            # normalization
+            attn = attn * (1.0 / math.sqrt(self.n_embd // self.n_head))
+            attn = attn.masked_fill(self.bias[:, :, :T, :T] == 0, float('-inf'))
+            attn = F.softmax(attn, dim=-1)
+            y = attn @ v    # (B, n_head, T, head_dim)
+
         y = y.transpose(1, 2)   # (B, T, n_head, head_dim)
         y = y.contiguous().view(B, T, self.n_embd)  # (B, T, n_embd)
         y = self.c_proj(y)
