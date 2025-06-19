@@ -54,26 +54,37 @@ def eval():
 
 
 def train(args):
-    device = 'cpu'
-    if torch.cuda.is_available():
-        device = 'cuda'
-    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-        device = 'mps'
+    if args.device is None:
+        device = 'cpu'
+        if torch.cuda.is_available():
+            device = 'cuda'
+        elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+            device = 'mps'
+    else:
+        device = args.device
     print(f'using device: {device}')
 
     torch.manual_seed(42)
     if torch.cuda.is_available():
         torch.cuda.manual_seed(42)
 
-    # change the matmul precision to use TensorFloat32
-    if args.tf32:
-        torch.set_float32_matmul_precision('high')
+    # change the matmul precision:
+    #   highest:    fp32 (24 mantissa bits with 23 bits explicitly stored)
+    #   high:       TensorFloat32 (10 mantissa bits explicitly stored)
+    #   medium:     bfloat16 (8 mantissa bits with 7 bits explicitly stored)
+    torch.set_float32_matmul_precision(args.precision)
 
     B, T = 1, 1024
     train_loader = DataLoaderLite(B, T)
 
     model = GPT2(GPT2Config())
     model.to(device)
+
+    # As of now, torch.compile() is not supported on MPS (Apple Metal Performance Shaders)
+    if device != 'mps':
+        # compile model to make the code fast
+        # adds compilation time to the training
+        model = torch.compile(model)
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-04)
     for i in range(50):
@@ -82,7 +93,9 @@ def train(args):
         x = x.to(device)
         y = y.to(device)
         optimizer.zero_grad()
-        logits, loss = model(x, y)
+        with torch.autocast(device_type=device, dtype=torch.bfloat16):
+            # Some CUDA ops might not be cast: https://docs.pytorch.org/docs/stable/amp.html#cuda-op-specific-behavior
+            logits, loss = model(x, y)
         loss.backward()
         optimizer.step()
         if torch.cuda.is_available():
@@ -95,7 +108,9 @@ def train(args):
 
 def parse_args():
     parser = argparse.ArgumentParser(description="GPT2 Single GPU Training")
-    parser.add_argument('--tf32', action='store_true', default=False, help="Activate TensorFloat32 in NVIDIA GPUs")
+    parser.add_argument('--device', default=None, help="Precision for fp operations on GPU")
+    parser.add_argument('--precision', default='highest', help="Precision for fp operations on GPU")
+    parser.add_argument('--flash_att', action='store_true', default=False, help="Use flash attention.")
     return parser.parse_args()
 
 
