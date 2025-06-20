@@ -76,8 +76,8 @@ def train(args):
     #   medium:     bfloat16 (8 mantissa bits with 7 bits explicitly stored)
     torch.set_float32_matmul_precision(args.precision)
 
-    total_batch_size = 5 * 1024
     B, T = 1, 1024
+    total_batch_size = 4 * T
     assert total_batch_size % (B * T) == 0, "total batch size should be divisible by B * T"
     grad_accum_steps = total_batch_size // (B * T)
     print(f'Total batch size is {total_batch_size}:')
