@@ -16,9 +16,9 @@ def train(args):
     ddp = int(os.environ.get('RANK', -1)) != -1 and torch.cuda.is_available()
     if ddp:
         init_process_group(backend='nccl')
-        ddp_rank = os.environ['RANK']               # process rank globally
-        ddp_local_rank = os.environ['LOCAL_RANK']   # process rank in the node (locally) => gpu id on the node
-        ddp_world_size = os.environ['WORLD_SIZE']   # total number of processes
+        ddp_rank = int(os.environ['RANK'])               # process rank globally
+        ddp_local_rank = int(os.environ['LOCAL_RANK'])   # process rank in the node (locally) => gpu id on the node
+        ddp_world_size = int(os.environ['WORLD_SIZE'])   # total number of processes
         device = f'cuda:{ddp_local_rank}'
         # master process do some coordination and synchronization
         is_master = ddp_rank == 0
