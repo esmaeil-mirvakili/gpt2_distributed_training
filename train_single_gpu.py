@@ -76,7 +76,13 @@ def train(args):
     #   medium:     bfloat16 (8 mantissa bits with 7 bits explicitly stored)
     torch.set_float32_matmul_precision(args.precision)
 
+    total_batch_size = 5 * 1024
     B, T = 1, 1024
+    assert total_batch_size % (B * T) == 0, "total batch size should be divisible by B * T"
+    grad_accum_steps = total_batch_size // (B * T)
+    print(f'Total batch size is {total_batch_size}:')
+    print(f'\tAccumulation steps: {grad_accum_steps}')
+
     train_loader = DataLoaderLite(B, T)
 
     model = GPT2(GPT2Config(vocab_size=50304))  # 50304 is a nice number => lots of power of 2: 393 * 128
@@ -113,14 +119,21 @@ def train(args):
     optimizer = configure_optimizers(model, weight_decay=0.1, learning_rate=64-4, device=device)
     for step in range(50):
         t0 = time.time()
-        x, y = next(train_loader)
-        x = x.to(device)
-        y = y.to(device)
         optimizer.zero_grad()
-        with torch.autocast(device_type=device, dtype=torch.bfloat16):
-            # Some CUDA ops might not be cast: https://docs.pytorch.org/docs/stable/amp.html#cuda-op-specific-behavior
-            logits, loss = model(x, y)
-        loss.backward()
+        # for logging
+        accum_loss = 0
+        # gradient accumulation => equivalent to sum(loss)
+        for micro_step in range(grad_accum_steps):
+            x, y = next(train_loader)
+            x = x.to(device)
+            y = y.to(device)
+            with torch.autocast(device_type=device, dtype=torch.bfloat16):
+                # Some CUDA ops might not be cast: https://docs.pytorch.org/docs/stable/amp.html#cuda-op-specific-behavior
+                logits, loss = model(x, y)
+            # scaling loss because of gradient accumulation => we need to average the sum
+            loss = loss / grad_accum_steps
+            accum_loss += loss.detach()
+            loss.backward()
         # gradient norm clipping => prevent the model from getting big shocks in terms of gradient magnitude
         # clip the global norm of the gradient at 1.0 (GPT3 hyperparam)
         norm = torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)  # global norm of the params
@@ -130,13 +143,15 @@ def train(args):
         for param_group in optimizer.param_groups:
             param_group['lr'] = lr
 
+
         optimizer.step()
+
         if torch.cuda.is_available():
             torch.cuda.synchronize()  # for calculating the step time
         t1 = time.time()
         dt = (t1 - t0) * 1000
         token_per_sec = (B * T) / (t1 - t0)
-        print(f'Step {step}: loss={loss} | norm: {norm:.2f} | dt={dt:.2f}ms | tok/sec={token_per_sec:.2f}')
+        print(f'Step {step}: loss={accum_loss} | norm: {norm:.2f} | dt={dt:.2f}ms | tok/sec={token_per_sec:.2f}')
 
 
 def parse_args():
