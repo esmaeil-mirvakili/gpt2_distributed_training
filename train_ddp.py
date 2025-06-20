@@ -58,7 +58,7 @@ def train(args):
     torch.set_float32_matmul_precision(args.precision)
 
     B, T = 1, 1024
-    total_batch_size = 8 * T
+    total_batch_size = 2 * T
     assert total_batch_size % (B * T * ddp_world_size) == 0, "total batch size should be divisible by B * T * world_size"
     grad_accum_steps = total_batch_size // (B * T * ddp_world_size)
     if is_master:
@@ -68,20 +68,20 @@ def train(args):
 
     train_loader = DataLoaderLite(B, T, world_size=ddp_world_size, rank=ddp_rank)
 
-    raw_model = GPT2(GPT2Config(vocab_size=50304))  # 50304 is a nice number => lots of power of 2: 393 * 128
-    raw_model.to(device)
+    model = GPT2(GPT2Config(vocab_size=50304))  # 50304 is a nice number => lots of power of 2: 393 * 128
+    model.to(device)
 
     # As of now, torch.compile() is not supported on MPS (Apple Metal Performance Shaders)
     if device != 'mps':
         # compile model to make the code fast
         # adds compilation time to the training
-        raw_model = torch.compile(raw_model)
+        model = torch.compile(model)
 
     # wrap th emodel in DDP for ddp training
     if ddp:
-        model = DDP(raw_model, device_ids=[ddp_local_rank])
+        model = DDP(model, device_ids=[ddp_local_rank])
     else:
-        model = raw_model
+        model = model
 
     max_lr = 6e-4
     min_lr = max_lr * 0.1
@@ -105,7 +105,7 @@ def train(args):
         return min_lr + coeff * (max_lr - min_lr)
 
     # optimizer = torch.optim.AdamW(model.parameters(), lr=3e-04, betas=(0.9, 0.95), eps=1e-8)
-    optimizer = configure_optimizers(raw_model, weight_decay=0.1, learning_rate=64-4, device=device)
+    optimizer = configure_optimizers(model, weight_decay=0.1, learning_rate=64-4, device=device)
     for step in range(50):
         t0 = time.time()
         optimizer.zero_grad()
