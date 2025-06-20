@@ -58,7 +58,7 @@ def train(args):
     torch.set_float32_matmul_precision(args.precision)
 
     B, T = 1, 1024
-    total_batch_size = 2 * T
+    total_batch_size = 8 * T
     assert total_batch_size % (B * T * ddp_world_size) == 0, "total batch size should be divisible by B * T * world_size"
     grad_accum_steps = total_batch_size // (B * T * ddp_world_size)
     if is_master:
