@@ -29,7 +29,7 @@ trainer:
   weight_decay: 0.1
   train_dataset:
     _target_: data.data.DataLoaderLite
-    data_root: /opt/ml/input/data/data/wikitext
+    data_root: /opt/ml/input/wikitext
   val_dataset:
     _target_: data.data.DataLoaderLite
-    data_root: /opt/ml/input/data/data/wikitext
+    data_root: /opt/ml/input/wikitext
