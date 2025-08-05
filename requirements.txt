@@ -1,6 +1,6 @@
-transformers
-tiktoken
-datasets
+transformers==4.46.3
+tiktoken==0.7.0
+datasets==2.21.0
 hydra-core
 omegaconf
 loguru
