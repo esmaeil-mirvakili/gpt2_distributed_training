@@ -36,7 +36,7 @@ def download(
     shard_size=int(1e8),
 ):
     # create cache local dir
-    DATA_CACHE_DIR = os.path.join(os.path.dirname(__file__), local_dir, dataset)
+    DATA_CACHE_DIR = os.path.join(local_dir, dataset)
     os.makedirs(DATA_CACHE_DIR, exist_ok=True)
 
     # download from huggingface[
