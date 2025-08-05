@@ -1,0 +1,35 @@
+device: cpu
+training_type: single_gpu
+trainer:
+  seed: 42
+  max_steps: 50
+  val_steps: 10
+  batch_size: 8
+  seq_length: 1024
+  checkpoint_dir: checkpoints
+  grad_accumulation_steps: 4
+  matmul_precision: high
+  optimizer:
+    _target_: torch.optim.AdamW
+  lr_scheduler:
+    max_lr: 6e-4
+    min_lr: 6e-5
+    warmup_steps: 1000
+    max_steps: 100000
+  model:
+    _target_: models.gpt2.GPT2
+    config:
+      vocab_size: 50257
+      n_layer: 12
+      n_head: 12
+      n_embd: 768
+      block_size: 1024
+      use_flash_attn: false
+  use_model_compile: true
+  weight_decay: 0.1
+  train_dataset:
+    _target_: data.data.DataLoaderLite
+    data_root: data/data/wikitext
+  val_dataset:
+    _target_: data.data.DataLoaderLite
+    data_root: data/data/wikitext
