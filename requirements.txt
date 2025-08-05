@@ -1,2 +1,7 @@
 transformers
 tiktoken
+datasets
+hydra-core
+omegaconf
+loguru
+wandb
