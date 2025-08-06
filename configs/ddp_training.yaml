@@ -1,5 +1,4 @@
-device: cpu
-training_type: single_gpu
+training_type: ddp
 trainer:
   seed: 42
   max_steps: 50

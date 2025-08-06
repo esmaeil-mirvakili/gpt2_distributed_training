@@ -15,19 +15,20 @@ def init_logger():
 class Config:
     trainer: TrainerConfig = field(default_factory=lambda: TrainerConfig())
     device: Literal["cpu", "mps", "cuda"] = "cpu"
-    training_type: Literal["single_gpu", "ddp", "fsdp", "deepspeed"] = "single_gpu"
+    training_type: Literal["ddp", "fsdp", "deepspeed"] = "ddp"
     resume: Optional[str] = None
 
 
-@hydra.main(version_base=None, config_path="configs", config_name="single_gpu")
+@hydra.main(version_base=None, config_path="configs", config_name="ddp_training")
 def main(config: Config):
     init_logger()
     logger.info("Configuration loaded: ", config)
-    trainer = DDPTrainer(
-        config.trainer,
-        config.device,
-        getattr(config, "resume", None),
-    )
+    if getattr(config, "training_type", "ddp") == "ddp":
+        trainer = DDPTrainer(
+            config.trainer,
+            getattr(config, "device", None),
+            getattr(config, "resume", None),
+        )
     trainer.train()
 
 
