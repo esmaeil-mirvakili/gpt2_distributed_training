@@ -88,9 +88,8 @@ class DDPTrainer:
         self.world_size = int(os.environ.get("WORLD_SIZE", 1))
         self.is_master = self.rank == 0
         self.distributed = self.world_size > 1 and self.device_type == "cuda"
-        if self.distributed:
-            self.device = f"cuda:{self.local_rank}"
         if self.device_type == "cuda":
+            self.device = f"cuda:{self.local_rank}"
             torch.cuda.set_device(torch.device(self.device))
 
         self.ctx = (
