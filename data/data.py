@@ -11,7 +11,6 @@ from loguru import logger
 class DatasetConfig:
     _target_: str = "data.DataLoaderLite"
     data_root: str = "data/wikitext"
-    seq_length: int = 1024
 
 
 def load_tokens(filename):
@@ -35,6 +34,7 @@ class DataLoaderLite:
         shards = os.listdir(data_root)
         shards = filter(lambda s: split in s, shards)
         shards = sorted(shards)
+        self.split = split
         self.shards = [os.path.join(data_root, s) for s in shards]
         assert len(shards) > 0, f"no shards found for split {split}"
         if rank == 0:
@@ -51,11 +51,15 @@ class DataLoaderLite:
         return self
 
     def __next__(self):
+        if self.current_pos + (self.B * self.T * self.world_size + 1) > len(
+            self.tokens
+        ):
+            raise StopIteration
         buf = self.tokens[self.current_pos : self.current_pos + self.B * self.T + 1]
         x = buf[:-1].view(self.B, self.T)
         y = buf[1:].view(self.B, self.T)
         self.current_pos += self.B * self.T * self.world_size
-        if self.current_pos + (self.B * self.T * self.world_size + 1) > len(
+        if self.split == "train" and self.current_pos + (self.B * self.T * self.world_size + 1) > len(
             self.tokens
         ):
             self.current_shard = (self.current_shard + 1) % len(self.shards)

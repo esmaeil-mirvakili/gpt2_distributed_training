@@ -23,23 +23,19 @@ class GPT2(nn.Module):
     def __init__(self, config: GPT2Config):
         super().__init__()
         self.config = config
-        self.transformer = nn.ModuleDict(
-            {
-                # token encoding: vocab_size => n_embd
-                "wte": nn.Embedding(config.vocab_size, config.n_embd),
-                # position encoding: block_size -> n_embd
-                "wpe": nn.Embedding(config.block_size, config.n_embd),
-                # hidden decode blocks
-                "h": nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
-                # final LayerNorm
-                "ln_f": nn.LayerNorm(config.n_embd),
-            }
-        )
+        # token encoding: vocab_size => n_embd
+        self.wte = nn.Embedding(config.vocab_size, config.n_embd)
+        # position encoding: block_size -> n_embd
+        self.wpe = nn.Embedding(config.block_size, config.n_embd)
+        # hidden decode blocks
+        self.layers = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
+        # final LayerNorm
+        self.ln_f = nn.LayerNorm(config.n_embd)
         # Language Model Head
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
         # weight sharing scheme
-        self.transformer.wte.weight = self.lm_head.weight
+        self.wte.weight = self.lm_head.weight
 
         # init weights
         self.apply(self._init_weights)
@@ -66,12 +62,12 @@ class GPT2(nn.Module):
 
         # positions
         pos = torch.arange(0, T, dtype=torch.long, device=idx.device)  # (T)
-        pos_embd = self.transformer.wpe(pos)  # (T, n_embd)
-        tok_embd = self.transformer.wte(idx)  # (B, T, n_emb)
+        pos_embd = self.wpe(pos)  # (T, n_embd)
+        tok_embd = self.wte(idx)  # (B, T, n_emb)
         x = pos_embd + tok_embd  # broadcasting: (B, T, n_embd)
-        for block in self.transformer.h:
+        for block in self.layers:
             x = block(x)
-        x = self.transformer.ln_f(x)
+        x = self.ln_f(x)
         logits = self.lm_head(x)  # (B, T, vocab_size)
         loss = None
         if targets is not None:
@@ -149,7 +145,7 @@ class MLP(nn.Module):
         self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd)
         self.gelu = nn.GELU(approximate="tanh")
         self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd)
-        self.c_proj.NANOGPT_SCALE_INIT = 1
+        setattr(self.c_proj, "NANOGPT_SCALE_INIT", 1)  # for weight init scaling
 
     def forward(self, x):
         x = self.c_fc(x)

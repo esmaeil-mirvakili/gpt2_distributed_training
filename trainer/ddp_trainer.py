@@ -1,9 +1,10 @@
 import inspect
 import os
+import re
 from contextlib import nullcontext
 from dataclasses import dataclass, field
 from time import time
-from typing import Optional
+from typing import Any, Dict, Optional
 
 import torch
 import torch.nn.functional as F
@@ -11,11 +12,11 @@ from hydra.utils import get_class, instantiate
 from loguru import logger
 from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
-from tqdm import tqdm
 from typing_extensions import Literal
 
 from data.data import DatasetConfig
 from models.gpt2 import GPT2Config
+from trainer.utils import CheckpointStrategy
 
 
 @dataclass
@@ -27,19 +28,27 @@ class LRSchedulerConfig:
 
 
 @dataclass
+class CheckpointStrategyConfig:
+    _target_: str = "trainer.ddp_trainer.DDPCheckpointStrategy"
+    config: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class TrainerConfig:
     seed: int = 42
     max_steps: int = 10
-    optimizer: dict = field(default_factory=dict)
-    lr_scheduler: LRSchedulerConfig = field(default_factory=lambda: LRSchedulerConfig())
+    optimizer: Dict[str, Any] = field(default_factory=dict)
+    lr_scheduler: LRSchedulerConfig = field(default_factory=LRSchedulerConfig)
     val_steps: int = 1000
-    checkpoint_dir: str = "checkpoints"
-    matmul_precision: Literal["highest", "high", "medium"] = "high"
+    checkpoint_strategy: CheckpointStrategyConfig = field(
+        default_factory=CheckpointStrategyConfig
+    )
+    matmul_precision: str = "high"
     batch_size: int = 64
     seq_length: int = 1024
     grad_accumulation_steps: int = 1
-    train_dataset: DatasetConfig = field(default_factory=lambda: DatasetConfig())
-    val_dataset: DatasetConfig = field(default_factory=lambda: DatasetConfig())
+    train_dataset: DatasetConfig = field(default_factory=DatasetConfig)
+    val_dataset: DatasetConfig = field(default_factory=DatasetConfig)
     model: dict = field(
         default_factory=lambda: {
             "_target_": "models.gpt2.GPT2",
@@ -48,6 +57,50 @@ class TrainerConfig:
     )
     use_model_compile: bool = True
     weight_decay: float = 0.1
+
+    def __post_init__(self):
+        allowed_precisions = ["highest", "high", "medium"]
+        if self.matmul_precision not in allowed_precisions:
+            raise ValueError(
+                f"Invalid matmul_precision '{self.matmul_precision}'. Allowed values are {allowed_precisions}."
+            )
+
+
+class DDPCheckpointStrategy(CheckpointStrategy):
+    def save_checkpoint(self, model, optimizer, loss, step, is_master):
+        if not is_master:
+            return
+
+        checkpoint_dir = self.config.checkpoint_dir
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{step:05d}.pt")
+        state = {
+            "step": step,
+            "avg_loss": loss,
+            "model": model.state_dict(),
+            "optimizer": optimizer.state_dict(),
+        }
+        torch.save(state, checkpoint_path)
+
+    def load_checkpoint(self, model, optimizer, device):
+        checkpoint_pattern = r"checkpoint_(\d+)\.pt"
+        latest_checkpoint = None
+        latest_step = -1
+        checkpoint_dir = self.config.checkpoint_dir
+        for filename in os.listdir(checkpoint_dir):
+            match = re.match(checkpoint_pattern, filename)
+            if match:
+                step = int(match.group(1))
+                if step > latest_step:
+                    latest_step = step
+                    latest_checkpoint = os.path.join(checkpoint_dir, filename)
+        if latest_checkpoint is None:
+            logger.warning("No checkpoint found.")
+            return 0
+        checkpoint = torch.load(latest_checkpoint, map_location=device)
+        model.load_state_dict(checkpoint["model"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
+        return checkpoint["step"]
 
 
 class DDPTrainer:
@@ -58,6 +111,7 @@ class DDPTrainer:
         resume: Optional[str] = None,
     ):
         self.config = config or TrainerConfig()
+        self.raw_model: Optional[torch.nn.Module] = None
         if device is None:
             self.device = self.device_type = "cpu"
             if torch.cuda.is_available():
@@ -77,12 +131,15 @@ class DDPTrainer:
             "mps",
             "cuda",
         ], f"Invalid device: {self.device_type}. Supported devices are 'cpu', 'mps', and 'cuda'."
-        if resume and os.path.exists(resume):
-            self._load_checkpoint(resume)
-        else:
-            self._initialize()
+        self._initialize()
+        self.start_step = 0
+        if resume:
+            logger.info("Resuming training...")
+            self.start_step = self.checkpoint_strategy.load_checkpoint(
+                self.raw_model, self.optimizer, self.device
+            )
 
-    def _initialize(self, start_step=0):
+    def _initialize(self):
         self.rank = int(os.environ.get("RANK", 0))
         self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
         self.world_size = int(os.environ.get("WORLD_SIZE", 1))
@@ -105,10 +162,10 @@ class DDPTrainer:
         # Set matmul precision
         torch.set_float32_matmul_precision(self.config.matmul_precision)
 
+        self.checkpoint_strategy = instantiate(self.config.checkpoint_strategy)
         self.model: torch.nn.Module = self._prepare_model()
         self.optimizer = self._prepare_optimizer()
         self.train_dataset, self.val_dataset = self._prepare_datasets()
-        self.start_step = start_step
         if self.is_master:
             logger.info("Training configuration:")
             logger.info(f"\tMax steps: {self.config.max_steps}")
@@ -124,7 +181,7 @@ class DDPTrainer:
     @logger.catch
     def train(self):
         if self.distributed:
-            init_process_group()
+            init_process_group(backend="nccl")
         logger.info("Starting training...")
         for step in range(self.start_step, self.config.max_steps):
             is_last_step = step == self.config.max_steps - 1
@@ -204,33 +261,17 @@ class DDPTrainer:
                 torch.distributed.all_reduce(
                     avg_loss, op=torch.distributed.ReduceOp.AVG
                 )
+                torch.distributed.all_reduce(
+                    perplexity, op=torch.distributed.ReduceOp.AVG
+                )
         if self.is_master:
             logger.info(
                 f"Validation step {step}: avg_loss={avg_loss:.4f}, perplexity={perplexity:.4f}"
             )
-            if step != 0:
-                self._checkpoint(step, avg_loss)
-
-    def _checkpoint(self, step, avg_loss):
-        assert self.is_master, "Checkpointing can only be done by the master process."
-        checkpoint_dir = self.config.checkpoint_dir
-        os.makedirs(checkpoint_dir, exist_ok=True)
-        checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{step:05d}.pt")
-        state = {
-            "step": step,
-            "avg_loss": avg_loss,
-            "model": self.raw_model.state_dict(),
-            "optimizer": self.optimizer.state_dict(),
-            "config": self.config,
-        }
-        torch.save(state, checkpoint_path)
-
-    def _load_checkpoint(self, checkpoint_path):
-        checkpoint = torch.load(checkpoint_path, map_location=self.device)
-        self.config = checkpoint["config"]
-        self._initialize(checkpoint["step"])
-        self.raw_model.load_state_dict(checkpoint["model"])
-        self.optimizer.load_state_dict(checkpoint["optimizer"])
+        if step != 0:
+            self.checkpoint_strategy.save_checkpoint(
+                self.raw_model, self.optimizer, avg_loss, step, self.is_master
+            )
 
     def _calculate_loss(self, x, y):
         x = x.to(self.device)

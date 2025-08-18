@@ -34,6 +34,7 @@ def download(
     local_dir="data",
     dataset="fineweb",
     shard_size=int(1e8),
+    num_shards=-1,
 ):
     # create cache local dir
     DATA_CACHE_DIR = os.path.join(local_dir, dataset)
@@ -97,6 +98,8 @@ def download(
                 # populate the next shard with the leftovers of the current doc
                 all_tokens_np[0 : len(tokens) - remainder] = tokens[remainder:]
                 token_count = len(tokens) - remainder
+                if shard_index > 0 and shard_index == num_shards:
+                    break
 
         # write any remaining tokens as the last shard
         if token_count != 0:
@@ -117,11 +120,14 @@ def parse_args():
         help="Dataset name to download",
     )
     parser.add_argument(
-        "--shard_size", default=int(1e8), type=int, help="Use flash attention."
+        "--shard_size", default=int(1e8), type=int, help="Shard size in tokens"
+    )
+    parser.add_argument(
+        "--num_shards", default=-1, type=int, help="Number of shards to create (optional, -1 for all shards)"
     )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-    download(local_dir=args.dir, dataset=args.dataset, shard_size=args.shard_size)
+    download(local_dir=args.dir, dataset=args.dataset, shard_size=args.shard_size, num_shards=args.num_shards)
