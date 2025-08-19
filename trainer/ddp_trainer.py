@@ -131,13 +131,7 @@ class DDPTrainer:
             "mps",
             "cuda",
         ], f"Invalid device: {self.device_type}. Supported devices are 'cpu', 'mps', and 'cuda'."
-        self._initialize()
-        self.start_step = 0
-        if resume:
-            logger.info("Resuming training...")
-            self.start_step = self.checkpoint_strategy.load_checkpoint(
-                self.raw_model, self.optimizer, self.device
-            )
+        self.resume = resume
 
     def _initialize(self):
         self.rank = int(os.environ.get("RANK", 0))
@@ -161,6 +155,9 @@ class DDPTrainer:
 
         # Set matmul precision
         torch.set_float32_matmul_precision(self.config.matmul_precision)
+        
+        if self.distributed:
+            init_process_group(backend="nccl")
 
         self.checkpoint_strategy = instantiate(self.config.checkpoint_strategy)
         self.model: torch.nn.Module = self._prepare_model()
@@ -180,8 +177,14 @@ class DDPTrainer:
 
     @logger.catch
     def train(self):
-        if self.distributed:
-            init_process_group(backend="nccl")
+        logger.info("Initializing Training...")
+        self._initialize()
+        self.start_step = 0
+        if self.resume:
+            logger.info("Resuming training...")
+            self.start_step = self.checkpoint_strategy.load_checkpoint(
+                self.raw_model, self.optimizer, self.device
+            )
         logger.info("Starting training...")
         for step in range(self.start_step, self.config.max_steps):
             is_last_step = step == self.config.max_steps - 1
