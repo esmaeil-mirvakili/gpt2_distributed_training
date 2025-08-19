@@ -208,7 +208,7 @@ class DDPTrainer:
             accumulated_loss += loss.detach()
             if self.distributed:
                 # Use no_sync to avoid synchronizing gradients during accumulation
-                with self.raw_model.no_sync():
+                with self.model.no_sync():
                     loss.backward()
             else:
                 loss.backward()
