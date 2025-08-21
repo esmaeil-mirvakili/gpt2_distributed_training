@@ -17,17 +17,14 @@ from torch.distributed.checkpoint.state_dict import (
 from torch.distributed.fsdp import FSDPModule, MixedPrecisionPolicy, fully_shard
 from torch.distributed.tensor import DTensor, distribute_tensor
 
-from trainer.base_trainer import CheckpointStrategy
-from trainer.utils import DDPTrainer, TrainerConfig
+from trainer.ddp_trainer import CheckpointStrategy, DDPTrainer, DDPTrainerConfig
 
 
 @dataclass
-class FSDPTrainerConfig(TrainerConfig):
-    forward_prefetch_modules: Optional[Union[int, List[int]]] = None
-    backward_prefetch_modules: Optional[Union[int, List[int]]] = None
+class FSDPTrainerConfig(DDPTrainerConfig):
+    forward_prefetch_modules: Optional[int] = None
+    backward_prefetch_modules: Optional[int] = None
     use_mixed_precision: bool = True
-    use_dcp_api: bool = True
-    use_cpu_offload: bool = True
 
 
 class FSDPCheckpointStrategy(CheckpointStrategy):
@@ -43,7 +40,7 @@ class FSDPCheckpointStrategy(CheckpointStrategy):
         }
         torch.save(state, checkpoint_path)
 
-    def load_checkpoint(self, model, optimizer, device):
+    def load_checkpoint(self, model, optimizer, device, is_master):
         checkpoint_pattern = r"checkpoint_(\d+)\.pt"
         latest_checkpoint = None
         latest_step = -1
@@ -56,12 +53,19 @@ class FSDPCheckpointStrategy(CheckpointStrategy):
                     latest_step = step
                     latest_checkpoint = os.path.join(checkpoint_dir, filename)
         if latest_checkpoint is None:
-            logger.warning("No checkpoint found.")
+            if is_master:
+                logger.warning("No checkpoint found.")
             return 0
+        if not is_master:
+            logger.info(f"Loading checkpoint from {latest_checkpoint}")
         checkpoint = torch.load(latest_checkpoint, map_location=device)
         self._load_model_state_dict(checkpoint["model"], model)
         self._load_optimizer_state_dict(checkpoint["optimizer"], optimizer, model)
-        return checkpoint["step"]
+        if is_master:
+            logger.info(
+                f"Loaded checkpoint step {checkpoint['step']} with avg_loss {checkpoint['avg_loss']}"
+            )
+        return checkpoint["step"] + 1
 
     def _get_model_state_dict(self, model, is_master: bool):
         if self.config.use_dcp_api:
@@ -187,14 +191,17 @@ class FSDPCheckpointStrategy(CheckpointStrategy):
 class FSDPTrainer(DDPTrainer):
     def __init__(
         self,
-        config: Optional[FSDPTrainerConfig] = None,
         device: Optional[Literal["cpu", "mps", "cuda"]] = None,
-        resume: Optional[str] = None,
+        resume: Optional[bool] = False,
+        config: Optional[FSDPTrainerConfig] = None,
     ):
-        super().__init__(config, device, resume)
+        super().__init__(device=device, resume=resume, config=config)
 
-    def _prepare_model(self):
-        super()._prepare_model()
+    def _prepare_model(self, model: torch.nn.Module):
+        self.raw_model = model
+        self.raw_model.to(self.device)
+        if self.config.use_model_compile and self.device_type != "mps":
+            self.raw_model = torch.compile(self.raw_model)
         if self.distributed:
             # apply fully_shard on layers and root model
             fsdp_kwargs = self._get_fsdp_kwargs()
@@ -237,3 +244,8 @@ class FSDPTrainer(DDPTrainer):
     @staticmethod
     def get_next_n_layers(layers, i, n):
         return [layers[i + j] for j in range(1, min(n, len(layers) - i))]
+    
+    def _initialize(self, model, train_dataset, val_dataset):
+        ret = super()._initialize(model, train_dataset, val_dataset)
+        assert self.distributed, "FSDPTrainer requires distributed training"
+        return ret

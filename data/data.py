@@ -19,11 +19,11 @@ def load_tokens(filename):
 
 
 class DataLoaderLite:
-    def __init__(self, B, T, data_root=None, world_size=1, rank=0, split="train"):
-        self.B = B
-        self.T = T
-        self.world_size = world_size
-        self.rank = rank
+    def __init__(self, batch_size, seq_length, data_root=None, split="train"):
+        self.batch_size = batch_size
+        self.seq_length = seq_length
+        self.world_size = int(os.environ.get("WORLD_SIZE", 1))
+        self.rank = int(os.environ.get("RANK", 0))
         self.current_shard = 0
         self.tokens = None
         self.current_pos = 0
@@ -37,32 +37,32 @@ class DataLoaderLite:
         self.split = split
         self.shards = [os.path.join(data_root, s) for s in shards]
         assert len(shards) > 0, f"no shards found for split {split}"
-        if rank == 0:
+        if self.rank == 0:
             logger.info(f"found {len(shards)} shards for split {split}")
         self.reset()
 
     def reset(self):
         self.current_shard = 0
         self.tokens = load_tokens(self.shards[self.current_shard])
-        self.current_pos = self.B * self.T * self.rank
+        self.current_pos = self.batch_size * self.seq_length * self.rank
 
     def __iter__(self):
         self.reset()
         return self
 
     def __next__(self):
-        if self.current_pos + (self.B * self.T * self.world_size + 1) > len(
+        if self.split != "train" and self.current_pos + (self.batch_size * self.seq_length * self.world_size + 1) > len(
             self.tokens
         ):
             raise StopIteration
-        buf = self.tokens[self.current_pos : self.current_pos + self.B * self.T + 1]
-        x = buf[:-1].view(self.B, self.T)
-        y = buf[1:].view(self.B, self.T)
-        self.current_pos += self.B * self.T * self.world_size
-        if self.split == "train" and self.current_pos + (self.B * self.T * self.world_size + 1) > len(
+        buf = self.tokens[self.current_pos : self.current_pos + self.batch_size * self.seq_length + 1]
+        x = buf[:-1].view(self.batch_size, self.seq_length)
+        y = buf[1:].view(self.batch_size, self.seq_length)
+        self.current_pos += self.batch_size * self.seq_length * self.world_size
+        if self.split == "train" and self.current_pos + (self.batch_size * self.seq_length * self.world_size + 1) > len(
             self.tokens
         ):
             self.current_shard = (self.current_shard + 1) % len(self.shards)
             self.tokens = load_tokens(self.shards[self.current_shard])
-            self.current_pos = self.B * self.T * self.rank
+            self.current_pos = self.batch_size * self.seq_length * self.rank
         return x, y

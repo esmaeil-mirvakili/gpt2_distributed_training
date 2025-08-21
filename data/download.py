@@ -94,12 +94,13 @@ def download(
                 ]
                 write_datafile(filename, all_tokens_np)
                 shard_index += 1
+                if shard_index > 0 and shard_index == num_shards:
+                    token_count = 0
+                    break
                 progress_bar = None
                 # populate the next shard with the leftovers of the current doc
                 all_tokens_np[0 : len(tokens) - remainder] = tokens[remainder:]
                 token_count = len(tokens) - remainder
-                if shard_index > 0 and shard_index == num_shards:
-                    break
 
         # write any remaining tokens as the last shard
         if token_count != 0:

@@ -1,0 +1,22 @@
+_target_: trainer.ddp_trainer.DDPTrainer
+device: cuda
+resume: null
+config:
+  seed: 42
+  max_steps: 50
+  val_steps: 10
+  grad_accumulation_steps: 4
+  matmul_precision: high
+  use_model_compile: true
+  weight_decay: 0.1
+  optimizer:
+    _target_: torch.optim.AdamW
+  lr_scheduler:
+    max_lr: 6e-4
+    min_lr: 6e-5
+    warmup_steps: 1000
+    max_steps: 100000
+  checkpoint_strategy:
+    _target_: trainer.ddp_trainer.DDPCheckpointStrategy
+    config:
+      checkpoint_dir: checkpoints/

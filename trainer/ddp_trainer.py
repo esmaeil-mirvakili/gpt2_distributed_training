@@ -14,8 +14,7 @@ from torch.distributed import destroy_process_group, init_process_group
 from torch.nn.parallel import DistributedDataParallel as DDP
 from typing_extensions import Literal
 
-from data.data import DatasetConfig
-from models.gpt2 import GPT2Config
+from trainer.base_trainer import BaseTrainerConfig, BaseTrainer
 from trainer.utils import CheckpointStrategy
 
 
@@ -32,9 +31,8 @@ class CheckpointStrategyConfig:
     _target_: str = "trainer.ddp_trainer.DDPCheckpointStrategy"
     config: Dict[str, Any] = field(default_factory=dict)
 
-
 @dataclass
-class TrainerConfig:
+class DDPTrainerConfig(BaseTrainerConfig):
     seed: int = 42
     max_steps: int = 10
     optimizer: Dict[str, Any] = field(default_factory=dict)
@@ -44,22 +42,12 @@ class TrainerConfig:
         default_factory=CheckpointStrategyConfig
     )
     matmul_precision: str = "high"
-    batch_size: int = 64
-    seq_length: int = 1024
     grad_accumulation_steps: int = 1
-    train_dataset: DatasetConfig = field(default_factory=DatasetConfig)
-    val_dataset: DatasetConfig = field(default_factory=DatasetConfig)
-    model: dict = field(
-        default_factory=lambda: {
-            "_target_": "models.gpt2.GPT2",
-            "config": GPT2Config(),
-        }
-    )
     use_model_compile: bool = True
     weight_decay: float = 0.1
 
     def __post_init__(self):
-        allowed_precisions = ["highest", "high", "medium"]
+        allowed_precisions = {"highest", "high", "medium"}
         if self.matmul_precision not in allowed_precisions:
             raise ValueError(
                 f"Invalid matmul_precision '{self.matmul_precision}'. Allowed values are {allowed_precisions}."
@@ -82,7 +70,7 @@ class DDPCheckpointStrategy(CheckpointStrategy):
         }
         torch.save(state, checkpoint_path)
 
-    def load_checkpoint(self, model, optimizer, device):
+    def load_checkpoint(self, model, optimizer, device, is_master):
         checkpoint_pattern = r"checkpoint_(\d+)\.pt"
         latest_checkpoint = None
         latest_step = -1
@@ -95,23 +83,31 @@ class DDPCheckpointStrategy(CheckpointStrategy):
                     latest_step = step
                     latest_checkpoint = os.path.join(checkpoint_dir, filename)
         if latest_checkpoint is None:
-            logger.warning("No checkpoint found.")
+            if is_master:
+                logger.warning("No checkpoint found.")
             return 0
+        if not is_master:
+            logger.info(f"Loading checkpoint from {latest_checkpoint}")
         checkpoint = torch.load(latest_checkpoint, map_location=device)
         model.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
-        return checkpoint["step"]
+        if is_master:
+            logger.info(
+                f"Loaded checkpoint step {checkpoint['step']} with avg_loss {checkpoint['avg_loss']}"
+            )
+        return checkpoint["step"] + 1
 
 
-class DDPTrainer:
+class DDPTrainer(BaseTrainer):
     def __init__(
         self,
-        config=None,
         device: Optional[Literal["cpu", "mps", "cuda"]] = None,
-        resume: Optional[str] = None,
+        resume: Optional[bool] = False,
+        config: Optional[DDPTrainerConfig] = None,
     ):
-        self.config = config or TrainerConfig()
-        self.raw_model: Optional[torch.nn.Module] = None
+        super().__init__(resume=resume)
+        self.config = config or DDPTrainerConfig()
+        self.raw_model: torch.nn.Module = None
         if device is None:
             self.device = self.device_type = "cpu"
             if torch.cuda.is_available():
@@ -131,9 +127,8 @@ class DDPTrainer:
             "mps",
             "cuda",
         ], f"Invalid device: {self.device_type}. Supported devices are 'cpu', 'mps', and 'cuda'."
-        self.resume = resume
 
-    def _initialize(self):
+    def _initialize(self, model: torch.nn.Module, train_dataset, val_dataset):
         self.rank = int(os.environ.get("RANK", 0))
         self.local_rank = int(os.environ.get("LOCAL_RANK", 0))
         self.world_size = int(os.environ.get("WORLD_SIZE", 1))
@@ -160,14 +155,12 @@ class DDPTrainer:
             init_process_group(backend="nccl")
 
         self.checkpoint_strategy = instantiate(self.config.checkpoint_strategy)
-        self.model: torch.nn.Module = self._prepare_model()
+        self.model = self._prepare_model(model)
         self.optimizer = self._prepare_optimizer()
-        self.train_dataset, self.val_dataset = self._prepare_datasets()
+        self.train_dataset, self.val_dataset = self._prepare_datasets(train_dataset, val_dataset)
         if self.is_master:
             logger.info("Training configuration:")
             logger.info(f"\tMax steps: {self.config.max_steps}")
-            logger.info(f"\tBatch size: {self.config.batch_size}")
-            logger.info(f"\tSequence length: {self.config.seq_length}")
             logger.info(
                 f"\tGrad accumulation steps: {self.config.grad_accumulation_steps}"
             )
@@ -176,22 +169,26 @@ class DDPTrainer:
             logger.info(f"\tWorld size: {self.world_size}")
 
     @logger.catch
-    def train(self):
-        logger.info("Initializing Training...")
-        self._initialize()
+    def train(self, model: torch.nn.Module, train_dataset, val_dataset):
+        self._initialize(model, train_dataset, val_dataset)
+        if self.is_master:
+            logger.info("Training Initialization complete.")
         self.start_step = 0
         if self.resume:
-            logger.info("Resuming training...")
+            if self.is_master:
+                logger.info("Resuming training...")
             self.start_step = self.checkpoint_strategy.load_checkpoint(
-                self.raw_model, self.optimizer, self.device
+                self.raw_model, self.optimizer, self.device, self.is_master
             )
-        logger.info("Starting training...")
+        if self.is_master:
+            logger.info("Starting training...")
         for step in range(self.start_step, self.config.max_steps):
             is_last_step = step == self.config.max_steps - 1
             self._train_step(self.train_dataset, step)
             if step % self.config.val_steps == 0 or is_last_step:
                 self._val_step(self.val_dataset, step)
-        logger.info("Training completed.")
+        if self.is_master:
+            logger.info("Training completed.")
         if self.distributed:
             destroy_process_group()
 
@@ -229,7 +226,8 @@ class DDPTrainer:
         t1 = time()
         elapsed = (t1 - t0) * 1000  # convert to milliseconds
         tokens_per_sec = (
-            self.config.batch_size
+            self.train_dataset.batch_size
+            * self.train_dataset.seq_length
             * self.config.grad_accumulation_steps
             * self.world_size
         ) / (t1 - t0)
@@ -292,8 +290,8 @@ class DDPTrainer:
         neg_log_probs = -probs.log().sum()
         return neg_log_probs
 
-    def _prepare_model(self):
-        self.raw_model: torch.nn.Module = instantiate(self.config.model)
+    def _prepare_model(self, model: torch.nn.Module):
+        self.raw_model = model
         self.raw_model.to(self.device)
         if self.config.use_model_compile and self.device_type != "mps":
             self.raw_model = torch.compile(self.raw_model)
@@ -301,23 +299,7 @@ class DDPTrainer:
             return DDP(self.raw_model, output_device=self.local_rank)
         return self.raw_model
 
-    def _prepare_datasets(self):
-        train_dataset = instantiate(
-            self.config.train_dataset,
-            self.config.batch_size,
-            self.config.seq_length,
-            world_size=self.world_size,
-            rank=self.rank,
-            split="train",
-        )
-        val_dataset = instantiate(
-            self.config.val_dataset,
-            self.config.batch_size,
-            self.config.seq_length,
-            world_size=self.world_size,
-            rank=self.rank,
-            split="val",
-        )
+    def _prepare_datasets(self, train_dataset, val_dataset):
         return train_dataset, val_dataset
 
     def _prepare_optimizer(self):
@@ -365,6 +347,3 @@ class DDPTrainer:
         return self.config.lr_scheduler.min_lr + coeff * (
             self.config.lr_scheduler.max_lr - self.config.lr_scheduler.min_lr
         )
-
-    def _prepare_batch(self, batch):
-        return batch

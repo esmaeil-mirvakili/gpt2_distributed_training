@@ -1,0 +1,7 @@
+defaults:
+  - schema
+  - trainer: ddp    # switch to fsdp at CLI with: trainer=fsdp
+  - model: gpt2
+  - dataset: wikitext
+
+log_dir: logs/j

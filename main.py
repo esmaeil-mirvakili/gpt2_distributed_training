@@ -1,60 +1,67 @@
 import sys
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, Any
+import os
 
 import hydra
 from hydra.core.config_store import ConfigStore
+from hydra.utils import instantiate
 from loguru import logger
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, MISSING
 
-from trainer.ddp_trainer import DDPTrainer, TrainerConfig
+from trainer.ddp_trainer import DDPTrainer, DDPTrainerConfig
+from trainer.fsdp_trainer import FSDPTrainer, FSDPTrainerConfig
+from trainer.base_trainer import BaseTrainer, BaseTrainerConfig
+from models.gpt2 import GPT2Config
 
 
-def init_logger():
-    logger.add("logs/training_{time}.log")
+def init_logger(path: str):
+    logger.add(os.path.join(path, "training_{time}.log"))
 
 
 @dataclass
-class Config:
-    device: Optional[str] = None
-    training_type: str = "ddp"
-    resume: Optional[str] = None
-    trainer: TrainerConfig = field(default_factory=TrainerConfig)
+class ModelConfig:
+    _target_: str = "models.gpt2.GPT2"
+    config: GPT2Config = field(default_factory=GPT2Config)
 
-    def __post_init__(self):
-        allowed_devices = ["cpu", "mps", "cuda"]
-        if self.device not in allowed_devices:
-            raise ValueError(
-                f"Invalid device '{self.device}'. Allowed values are {allowed_devices}."
-            )
-        allowed_training_types = ["ddp", "fsdp", "deepspeed"]
-        if self.training_type not in allowed_training_types:
-            raise ValueError(
-                f"Invalid training_type '{self.training_type}'. Allowed values are {allowed_training_types}."
-            )
+
+@dataclass
+class TrainerConfig:
+    device: Optional[str] = None
+    resume: Optional[bool] = None
+@dataclass
+class DDPConfig(TrainerConfig):
+    _target_: str = "trainer.ddp_trainer.DDPTrainer"
+    config: DDPTrainerConfig = field(default_factory=DDPTrainerConfig)
+    
+@dataclass
+class FSDPConfig(TrainerConfig):
+    _target_: str = "trainer.fsdp_trainer.FSDPTrainer"
+    config: FSDPTrainerConfig = field(default_factory=FSDPTrainerConfig)
+    
+
+@dataclass
+class Config:
+    trainer: TrainerConfig = MISSING
+    model: ModelConfig = field(default_factory=ModelConfig)
+    dataset: dict = field(default_factory=dict)
+    log_dir: str = "logs/"
 
 
 cs = ConfigStore.instance()
-cs.store(name="gpt2_training_config", node=Config)
+cs.store(name="schema", node=Config)
+cs.store(group="trainer", name="ddp", node=DDPConfig)
+cs.store(group="trainer", name="fsdp", node=FSDPConfig)
 
-
-@hydra.main(version_base=None, config_path="configs", config_name="ddp_training")
-def main(cfg: Optional[Config] = None):
-    init_logger()
-    config = OmegaConf.merge(OmegaConf.structured(Config), cfg)
-    logger.info(f"Configuration loaded: {type(config)}")
-    trainer = None
-    if getattr(config, "training_type", "ddp") == "ddp":
-        trainer = DDPTrainer(
-            config.trainer,
-            getattr(config, "device", None),
-            getattr(config, "resume", None),
-        )
-    else:
-        raise ValueError(
-            f"Unsupported training type '{config.training_type}'. Only 'ddp' is currently supported."
-        )
-    trainer.train()
+@hydra.main(version_base="1.3", config_path="configs", config_name="config")
+def main(config: Config):
+    init_logger(config.log_dir)
+    logger.info(f"Configuration loaded: \n{OmegaConf.to_yaml(config, resolve=True)}")
+    trainer = instantiate(config.trainer, _convert_="partial", _recursive_=False)
+    model = instantiate(config.model, _recursive_=True)
+    train_dataset = instantiate(config.dataset.train_dataset)
+    val_dataset = instantiate(config.dataset.val_dataset)
+    trainer.train(model, train_dataset, val_dataset)
 
 
 def hydra_arg_fix():
