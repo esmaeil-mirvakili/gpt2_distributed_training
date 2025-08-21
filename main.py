@@ -75,5 +75,5 @@ def hydra_arg_fix():
 
 
 if __name__ == "__main__":
-    # hydra_arg_fix()
+    hydra_arg_fix()
     main()
