@@ -65,12 +65,32 @@ def main(config: Config):
 
 
 def hydra_arg_fix():
-    hydra_formatted_args = []
-    for arg in sys.argv:
-        if arg.startswith("--"):
-            hydra_formatted_args.append(arg.replace("--", ""))
+    if len(sys.argv) <= 1:
+        return
+    hydra_formatted_args = [sys.argv[0]]
+    i = 1
+    while i < len(sys.argv):
+        a = sys.argv[i]
+        if a.startswith("--") and "." in a[2:]:
+            # support --key=value
+            if "=" in a:
+                k, v = a[2:].split("=", 1)
+                hydra_formatted_args.append(f"{k}={v}")
+                i += 1
+            else:
+                # support --key value   (value might be missing)
+                k = a[2:]
+                if i + 1 < len(sys.argv) and not sys.argv[i + 1].startswith("--"):
+                    v = sys.argv[i + 1]
+                    hydra_formatted_args.append(f"{k}={v}")
+                    i += 2
+                else:
+                    # bare flag => true
+                    hydra_formatted_args.append(f"{k}=true")
+                    i += 1
         else:
-            hydra_formatted_args.append(arg)
+            hydra_formatted_args.append(a)
+            i += 1
     sys.argv = hydra_formatted_args
 
 

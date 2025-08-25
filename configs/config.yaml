@@ -4,4 +4,4 @@ defaults:
   - model: gpt2
   - dataset: wikitext
 
-log_dir: logs/j
+log_dir: logs/
