@@ -45,6 +45,7 @@ class FSDPCheckpointStrategy(CheckpointStrategy):
         latest_checkpoint = None
         latest_step = -1
         checkpoint_dir = self.config.checkpoint_dir
+        os.makedirs(checkpoint_dir, exist_ok=True)
         for filename in os.listdir(checkpoint_dir):
             match = re.match(checkpoint_pattern, filename)
             if match:
