@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+pip install -r requirements.txt
+
 # --- Read SageMaker env (present on all hosts) ---
 HOSTS_JSON="${SM_HOSTS:-[]}"
 CURRENT_HOST="${SM_CURRENT_HOST:-localhost}"
