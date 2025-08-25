@@ -71,7 +71,7 @@ def hydra_arg_fix():
     i = 1
     while i < len(sys.argv):
         a = sys.argv[i]
-        if a.startswith("--") and "." in a[2:]:
+        if a.startswith("--"):
             # support --key=value
             if "=" in a:
                 k, v = a[2:].split("=", 1)
@@ -92,6 +92,7 @@ def hydra_arg_fix():
             hydra_formatted_args.append(a)
             i += 1
     sys.argv = hydra_formatted_args
+    print(f"Hydra formatted args: {sys.argv}")
 
 
 if __name__ == "__main__":
