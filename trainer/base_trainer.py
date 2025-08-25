@@ -41,6 +41,3 @@ class BaseTrainer(ABC):
 
     def _prepare_optimizer(self):
         raise NotImplementedError(self._NOT_IMPLEMENTED_MSG)
-    
-    def _prepare_optimizer(self):
-        raise NotImplementedError(self._NOT_IMPLEMENTED_MSG)
