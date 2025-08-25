@@ -199,17 +199,17 @@ class DDPTrainer(BaseTrainer):
         self.optimizer.zero_grad()
         accumulated_loss = 0.0  # for logging
         # gradient accumulation
-        for _ in range(self.config.grad_accumulation_steps):
+        for micro_step in range(self.config.grad_accumulation_steps):
             x, y = next(train_dataset)
             metrics = self._calculate_loss(x, y)
             loss = metrics["loss"] / self.config.grad_accumulation_steps
             accumulated_loss += loss.detach()
-            if self.distributed:
-                # Use no_sync to avoid synchronizing gradients during accumulation
-                with self.model.no_sync():
-                    loss.backward()
-            else:
-                loss.backward()
+            need_sync = (micro_step == self.config.grad_accumulation_steps - 1)
+            if hasattr(self.model, "require_backward_grad_sync"):
+                self.model.require_backward_grad_sync = need_sync
+            loss.backward()
+        if hasattr(self.model, "require_backward_grad_sync"):
+            self.model.require_backward_grad_sync = True
         if self.distributed:
             torch.distributed.all_reduce(
                 accumulated_loss, op=torch.distributed.ReduceOp.AVG
