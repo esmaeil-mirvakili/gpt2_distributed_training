@@ -192,6 +192,18 @@ class DDPTrainer(BaseTrainer):
             logger.info("Training completed.")
         if self.distributed:
             destroy_process_group()
+    
+    @staticmethod
+    def _to_scalar(x):
+        try:
+            from torch.distributed._tensor import DTensor  # PyTorch 2.7+
+            if isinstance(x, DTensor):
+                return x.to_local().detach().float().item()
+        except Exception:
+            pass
+        if isinstance(x, torch.Tensor):
+            return x.detach().float().item()
+        return float(x)
 
     def _train_step(self, train_dataset, step):
         t0 = time()
@@ -234,7 +246,7 @@ class DDPTrainer(BaseTrainer):
         ) / (t1 - t0)
         if self.is_master:
             logger.info(
-                f"Step {step}: loss={accumulated_loss:.4f} | norm: {norm:.2f} | dt={elapsed:.2f}ms | tok/sec={tokens_per_sec:.2f}"
+                f"Step {step}: loss={self._to_scalar(accumulated_loss):.4f} | norm: {self._to_scalar(norm):.2f} | dt={elapsed:.2f}ms | tok/sec={tokens_per_sec:.2f}"
             )
 
     def _val_step(self, val_dataset, step):
