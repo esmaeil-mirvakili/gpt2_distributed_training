@@ -69,8 +69,8 @@ class FSDPCheckpointStrategy(CheckpointStrategy):
             checkpoint = torch.load(latest_checkpoint, map_location=device)
         else:
             checkpoint = None
-        self._load_model_state_dict(checkpoint["model"], model)
-        self._load_optimizer_state_dict(checkpoint["optimizer"], optimizer, model)
+        self._load_model_state_dict(checkpoint["model"] if is_master else {}, model)
+        self._load_optimizer_state_dict(checkpoint["optimizer"] if is_master else {}, optimizer, model)
         if is_master:
             logger.info(
                 f"Loaded checkpoint step {checkpoint['step']} with avg_loss {checkpoint['avg_loss']}"
