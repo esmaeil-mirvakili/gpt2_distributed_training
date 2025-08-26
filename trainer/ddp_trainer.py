@@ -15,7 +15,7 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from typing_extensions import Literal
 
 from trainer.base_trainer import BaseTrainerConfig, BaseTrainer
-from trainer.utils import CheckpointStrategy
+from trainer.utils import CheckpointStrategy, _to_scalar
 
 
 @dataclass
@@ -192,12 +192,6 @@ class DDPTrainer(BaseTrainer):
             logger.info("Training completed.")
         if self.distributed:
             destroy_process_group()
-    
-    @staticmethod
-    def _to_scalar(x):
-        if isinstance(x, torch.Tensor):
-            return x.detach().float().item()
-        return float(x)
 
     def _train_step(self, train_dataset, step):
         t0 = time()
@@ -240,7 +234,7 @@ class DDPTrainer(BaseTrainer):
         ) / (t1 - t0)
         if self.is_master:
             logger.info(
-                f"Step {step}: loss={self._to_scalar(accumulated_loss):.4f} | norm: {self._to_scalar(norm):.2f} | dt={elapsed:.2f}ms | tok/sec={tokens_per_sec:.2f}"
+                f"Step {step}: loss={_to_scalar(accumulated_loss):.4f} | norm: {_to_scalar(norm):.2f} | dt={elapsed:.2f}ms | tok/sec={tokens_per_sec:.2f}"
             )
 
     def _val_step(self, val_dataset, step):

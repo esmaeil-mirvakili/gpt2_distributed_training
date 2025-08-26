@@ -17,7 +17,8 @@ from torch.distributed.checkpoint.state_dict import (
 from torch.distributed.fsdp import FSDPModule, MixedPrecisionPolicy, fully_shard
 from torch.distributed.tensor import DTensor, distribute_tensor
 
-from trainer.ddp_trainer import CheckpointStrategy, DDPTrainer, DDPTrainerConfig
+from trainer.ddp_trainer import DDPTrainer, DDPTrainerConfig
+from utils import _to_scalar, CheckpointStrategy
 
 
 @dataclass
@@ -34,7 +35,7 @@ class FSDPCheckpointStrategy(CheckpointStrategy):
         checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{step:05d}.pt")
         state = {
             "step": step,
-            "avg_loss": loss,
+            "avg_loss": _to_scalar(loss),
             "model": self._get_model_state_dict(model, is_master),
             "optimizer": self._get_optimizer_state_dict(optimizer, model, is_master),
         }
@@ -46,28 +47,35 @@ class FSDPCheckpointStrategy(CheckpointStrategy):
         latest_checkpoint = None
         latest_step = -1
         checkpoint_dir = self.config.checkpoint_dir
-        os.makedirs(checkpoint_dir, exist_ok=True)
-        for filename in os.listdir(checkpoint_dir):
-            match = re.match(checkpoint_pattern, filename)
-            if match:
-                step = int(match.group(1))
-                if step > latest_step:
-                    latest_step = step
-                    latest_checkpoint = os.path.join(checkpoint_dir, filename)
+        if is_master:
+            os.makedirs(checkpoint_dir, exist_ok=True)
+            for filename in os.listdir(checkpoint_dir):
+                match = re.match(checkpoint_pattern, filename)
+                if match:
+                    step = int(match.group(1))
+                    if step > latest_step:
+                        latest_step = step
+                        latest_checkpoint = os.path.join(checkpoint_dir, filename)
+        if torch.distributed.is_available() and torch.distributed.is_initialized():
+            obj = [latest_checkpoint, latest_step]
+            torch.distributed.broadcast_object_list(obj, src=0)
+            latest_checkpoint, latest_step = obj[0], obj[1]
         if latest_checkpoint is None:
             if is_master:
                 logger.warning("No checkpoint found.")
             return 0
-        if not is_master:
+        if is_master:
             logger.info(f"Loading checkpoint from {latest_checkpoint}")
-        checkpoint = torch.load(latest_checkpoint, map_location=device)
+            checkpoint = torch.load(latest_checkpoint, map_location=device)
+        else:
+            checkpoint = None
         self._load_model_state_dict(checkpoint["model"], model)
         self._load_optimizer_state_dict(checkpoint["optimizer"], optimizer, model)
         if is_master:
             logger.info(
                 f"Loaded checkpoint step {checkpoint['step']} with avg_loss {checkpoint['avg_loss']}"
             )
-        return checkpoint["step"] + 1
+        return latest_step + 1
 
     def _get_model_state_dict(self, model, is_master: bool):
         return get_model_state_dict(
@@ -168,12 +176,3 @@ class FSDPTrainer(DDPTrainer):
         assert self.distributed, "FSDPTrainer requires distributed training"
         return ret
     
-    @staticmethod
-    def _to_scalar(x):
-        try:
-            from torch.distributed._tensor import DTensor  # PyTorch 2.7+
-            if isinstance(x, DTensor):
-                return x.to_local().detach().float().item()
-        except Exception:
-            pass
-        return super()._to_scalar(x)
