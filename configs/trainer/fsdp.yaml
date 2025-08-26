@@ -21,5 +21,4 @@ config:
     _target_: trainer.fsdp_trainer.FSDPCheckpointStrategy
     config:
       checkpoint_dir: checkpoints/
-      use_dcp_api: true
       use_cpu_offload: true

@@ -1,0 +1,40 @@
+device: mps
+training_type: fsdp
+trainer:
+  seed: 42
+  max_steps: 10
+  val_steps: 10
+  batch_size: 2
+  seq_length: 10
+  grad_accumulation_steps: 1
+  use_mixed_precision: true
+  use_cpu_offload: true
+  matmul_precision: high
+  optimizer:
+    _target_: torch.optim.AdamW
+  lr_scheduler:
+    max_lr: 6e-4
+    min_lr: 6e-5
+    warmup_steps: 1000
+    max_steps: 100000
+  checkpoint_strategy:
+    _target_: trainer.fsdp_trainer.FSDPCheckpointStrategy
+    config:
+      checkpoint_dir: checkpoints/
+  model:
+    _target_: models.gpt2.GPT2
+    config:
+      vocab_size: 50257
+      n_layer: 12
+      n_head: 12
+      n_embd: 768
+      block_size: 1024
+      use_flash_attn: false
+  use_model_compile: true
+  weight_decay: 0.1
+  train_dataset:
+    _target_: data.data.DataLoaderLite
+    data_root: data/wikitext
+  val_dataset:
+    _target_: data.data.DataLoaderLite
+    data_root: data/wikitext

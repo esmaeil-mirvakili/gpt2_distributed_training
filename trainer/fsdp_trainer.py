@@ -38,7 +38,8 @@ class FSDPCheckpointStrategy(CheckpointStrategy):
             "model": self._get_model_state_dict(model, is_master),
             "optimizer": self._get_optimizer_state_dict(optimizer, model, is_master),
         }
-        torch.save(state, checkpoint_path)
+        if is_master:
+            torch.save(state, checkpoint_path)
 
     def load_checkpoint(self, model, optimizer, device, is_master):
         checkpoint_pattern = r"checkpoint_(\d+)\.pt"
@@ -69,124 +70,40 @@ class FSDPCheckpointStrategy(CheckpointStrategy):
         return checkpoint["step"] + 1
 
     def _get_model_state_dict(self, model, is_master: bool):
-        if self.config.use_dcp_api:
-            return get_model_state_dict(
-                model=model,
-                options=StateDictOptions(
-                    full_state_dict=True, cpu_offload=self.config.use_cpu_offload
-                ),
-            )
-        sharded_state_dict = model.state_dict()
-        cpu_offloaded_state_dict = {}
-        for param_name, param in sharded_state_dict.items():
-            full_param = param.full_tensor()
-            if is_master:
-                cpu_offloaded_state_dict[param_name] = full_param.cpu()
-            else:
-                del full_param
-        return cpu_offloaded_state_dict
+        return get_model_state_dict(
+            model=model,
+            options=StateDictOptions(
+                full_state_dict=True, cpu_offload=self.config.use_cpu_offload
+            ),
+        )
 
     def _load_model_state_dict(self, state_dict, model):
-        if self.config.use_dcp_api:
-            set_model_state_dict(
-                model=model,
-                model_state_dict=state_dict,
-                options=StateDictOptions(
-                    full_state_dict=True, broadcast_from_rank0=True
-                ),
-            )
-        else:
-            meta_state_dict = model.state_dict()
-            sharded_state_dict = {}
-            for param_name, param in state_dict.items():
-                meta_param = meta_state_dict.get(param_name)
-                sharded_tensor = distribute_tensor(
-                    param, meta_param.device_mesh, meta_param.placements
-                )
-                sharded_state_dict[param_name] = nn.Parameter(sharded_tensor)
-            model.load_state_dict(sharded_state_dict, strict=False, assign=True)
+        set_model_state_dict(
+            model=model,
+            model_state_dict=state_dict,
+            options=StateDictOptions(
+                full_state_dict=True, broadcast_from_rank0=True
+            ),
+        )
 
     def _get_optimizer_state_dict(self, optimizer, model, is_master: bool):
-        if self.config.use_dcp_api:
-            return get_optimizer_state_dict(
-                model=model,
-                optimizers=optimizer,
-                options=StateDictOptions(
-                    full_state_dict=True, cpu_offload=self.config.use_cpu_offload
-                ),
-            )
-        sharded_optimizer_state_dict = optimizer.state_dict()["state"]
-        full_state_dict = {}
-        for group_id, sharded_group in sharded_optimizer_state_dict.items():
-            group_state = {}
-            for attr, sharded_tensor in sharded_group.items():
-                full_tensor = (
-                    sharded_tensor.full_tensor()
-                    if isinstance(sharded_tensor, DTensor)
-                    else sharded_tensor
-                )
-                if is_master:
-                    group_state[attr] = full_tensor.cpu()
-                else:
-                    del full_tensor
-            if is_master:
-                full_state_dict[group_id] = group_state
-            else:
-                del group_state
-        final_state_dict = {
-            "state": full_state_dict,
-            "param_groups": optimizer.state_dict()["param_groups"],
-        }
-        return final_state_dict if is_master else {}
+        return get_optimizer_state_dict(
+            model=model,
+            optimizers=optimizer,
+            options=StateDictOptions(
+                full_state_dict=True, cpu_offload=self.config.use_cpu_offload
+            ),
+        )
 
     def _load_optimizer_state_dict(self, state_dict, optimizer, model):
-        if self.config.use_dcp_api:
-            set_optimizer_state_dict(
-                model=model,
-                optimizers=optimizer,
-                optim_state_dict=state_dict,
-                options=StateDictOptions(
-                    full_state_dict=True, broadcast_from_rank0=True
-                ),
-            )
-        else:
-            _init_optim_state(optimizer)
-            param_groups = optimizer.state_dict()["param_groups"]
-            state = optimizer.state_dict()["state"]
-
-            full_param_groups = state_dict["param_groups"]
-            full_state = state_dict["state"]
-
-            for param_group, full_param_group in zip(param_groups, full_param_groups):
-                for key, value in full_param_group.items():
-                    if key == "params":
-                        continue
-                    param_group[key] = value
-                for pid, full_pid in zip(
-                    param_group["params"], full_param_group["params"]
-                ):
-                    if pid not in state:
-                        continue
-                    param_state = state[pid]
-                    full_param_state = full_state[full_pid]
-                    for attr, full_tensor in full_param_state.items():
-                        sharded_tensor = param_state[attr]
-                        if isinstance(sharded_tensor, DTensor):
-                            # exp_avg is DTensor
-                            param_state[attr] = distribute_tensor(
-                                full_tensor,
-                                sharded_tensor.device_mesh,
-                                sharded_tensor.placements,
-                            )
-                        else:
-                            # step is plain tensor
-                            param_state[attr] = full_tensor
-            optimizer.load_state_dict(
-                {
-                    "param_groups": param_groups,
-                    "state": state,
-                }
-            )
+        set_optimizer_state_dict(
+            model=model,
+            optimizers=optimizer,
+            optim_state_dict=state_dict,
+            options=StateDictOptions(
+                full_state_dict=True, broadcast_from_rank0=True
+            ),
+        )
 
 
 class FSDPTrainer(DDPTrainer):
@@ -250,3 +167,13 @@ class FSDPTrainer(DDPTrainer):
         ret = super()._initialize(model, train_dataset, val_dataset)
         assert self.distributed, "FSDPTrainer requires distributed training"
         return ret
+    
+    @staticmethod
+    def _to_scalar(x):
+        try:
+            from torch.distributed._tensor import DTensor  # PyTorch 2.7+
+            if isinstance(x, DTensor):
+                return x.to_local().detach().float().item()
+        except Exception:
+            pass
+        return super()._to_scalar(x)
