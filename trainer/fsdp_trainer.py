@@ -18,7 +18,7 @@ from torch.distributed.fsdp import FSDPModule, MixedPrecisionPolicy, fully_shard
 from torch.distributed.tensor import DTensor, distribute_tensor
 
 from trainer.ddp_trainer import DDPTrainer, DDPTrainerConfig
-from utils import _to_scalar, CheckpointStrategy
+from trainer.utils import _to_scalar, CheckpointStrategy
 
 
 @dataclass
