@@ -70,7 +70,7 @@ class DeepSpeedCheckpointStrategy(CheckpointStrategy):
             load_optimizer_states=True,
             load_lr_scheduler_states=True
         )
-        if checkpoint is None:
+        if checkpoint is None or checkpoint[0] is None or checkpoint[1] is None:
             if is_master:
                 logger.warning("No checkpoint found.")
             return 0
