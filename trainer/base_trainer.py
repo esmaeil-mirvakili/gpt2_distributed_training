@@ -2,6 +2,7 @@ from abc import ABC
 from dataclasses import dataclass
 from typing import Optional, Literal
 import torch
+from loguru import logging
 
 @dataclass
 class BaseTrainerConfig:
@@ -23,7 +24,11 @@ class BaseTrainer(ABC):
         
     def _initialize(self, model: torch.nn.Module, train_dataset, val_dataset):
         raise NotImplementedError(self._NOT_IMPLEMENTED_MSG)
-
+    
+    def _destroy(self):
+        raise NotImplementedError(self._NOT_IMPLEMENTED_MSG)
+    
+    @logger.catch
     def train(self, model: torch.nn.Module, train_dataset, val_dataset):
         raise NotImplementedError(self._NOT_IMPLEMENTED_MSG)
 

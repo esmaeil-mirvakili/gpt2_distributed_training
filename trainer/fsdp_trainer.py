@@ -32,7 +32,7 @@ class FSDPCheckpointStrategy(CheckpointStrategy):
     def save_checkpoint(self, model, optimizer, loss, step, is_master):
         checkpoint_dir = self.config.checkpoint_dir
         os.makedirs(checkpoint_dir, exist_ok=True)
-        checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{step:05d}.pt")
+        checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{step:07d}.pt")
         state = {
             "step": step,
             "avg_loss": _to_scalar(loss),

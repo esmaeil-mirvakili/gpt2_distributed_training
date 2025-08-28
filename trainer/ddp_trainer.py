@@ -61,7 +61,7 @@ class DDPCheckpointStrategy(CheckpointStrategy):
 
         checkpoint_dir = self.config.checkpoint_dir
         os.makedirs(checkpoint_dir, exist_ok=True)
-        checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{step:05d}.pt")
+        checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_{step:07d}.pt")
         state = {
             "step": step,
             "avg_loss": loss,
@@ -87,7 +87,7 @@ class DDPCheckpointStrategy(CheckpointStrategy):
             if is_master:
                 logger.warning("No checkpoint found.")
             return 0
-        if not is_master:
+        if is_master:
             logger.info(f"Loading checkpoint from {latest_checkpoint}")
         checkpoint = torch.load(latest_checkpoint, map_location=device)
         model.load_state_dict(checkpoint["model"])
@@ -106,7 +106,7 @@ class DDPTrainer(BaseTrainer):
         resume: Optional[bool] = False,
         config: Optional[DDPTrainerConfig] = None,
     ):
-        super().__init__(resume=resume)
+        super().__init__(device=device, resume=resume, config=config)
         self.config = config or DDPTrainerConfig()
         self.raw_model: torch.nn.Module = None
         if device is None:
@@ -161,13 +161,17 @@ class DDPTrainer(BaseTrainer):
         self.train_dataset, self.val_dataset = self._prepare_datasets(train_dataset, val_dataset)
         if self.is_master:
             logger.info("Training configuration:")
-            logger.info(f"\tMax steps: {self.config.max_steps}")
+            logger.info(f"Max steps: {self.config.max_steps}")
             logger.info(
-                f"\tGrad accumulation steps: {self.config.grad_accumulation_steps}"
+                f"Grad accumulation steps: {self.config.grad_accumulation_steps}"
             )
-            logger.info(f"\tDevice: {self.device}")
-            logger.info(f"\tDistributed: {self.distributed}")
-            logger.info(f"\tWorld size: {self.world_size}")
+            logger.info(f"Device: {self.device}")
+            logger.info(f"Distributed: {self.distributed}")
+            logger.info(f"World size: {self.world_size}")
+    
+    def _destroy(self):
+        if self.distributed:
+            destroy_process_group()
 
     @logger.catch
     def train(self, model: torch.nn.Module, train_dataset, val_dataset):
@@ -190,14 +194,13 @@ class DDPTrainer(BaseTrainer):
                 self._val_step(self.val_dataset, step)
         if self.is_master:
             logger.info("Training completed.")
-        if self.distributed:
-            destroy_process_group()
+        self._destroy()
 
     def _train_step(self, train_dataset, step):
         t0 = time()
         self.model.train()
         self.optimizer.zero_grad()
-        accumulated_loss = 0.0  # for logging
+        accumulated_loss = torch.zeros(1, device=self.model.device)  # for logging
         # gradient accumulation
         for micro_step in range(self.config.grad_accumulation_steps):
             x, y = next(train_dataset)
@@ -240,10 +243,10 @@ class DDPTrainer(BaseTrainer):
     def _val_step(self, val_dataset, step):
         self.model.eval()
         val_dataset.reset()
-        loss = 0
-        step_count = 0
-        all_neg_log_probs = 0.0
-        tokens_count = 0
+        loss = torch.zeros(1, device=self.model.device)
+        step_count = torch.zeros(1, device=self.model.device)
+        all_neg_log_probs = torch.zeros(1, device=self.model.device)
+        tokens_count = torch.zeros(1, device=self.model.device)
         with torch.no_grad():
             for x, y in val_dataset:
                 metrics = self._calculate_loss(x, y)
@@ -253,19 +256,25 @@ class DDPTrainer(BaseTrainer):
                     metrics["logits"], y
                 )
                 tokens_count += y.numel()
-            avg_loss = (loss / step_count) if step_count > 0 else 0.0
-            perplexity = (
-                torch.exp(all_neg_log_probs / tokens_count)
-                if tokens_count > 0
-                else float("inf")
-            )
             if self.distributed:
                 torch.distributed.all_reduce(
-                    avg_loss, op=torch.distributed.ReduceOp.AVG
+                    loss, op=torch.distributed.ReduceOp.SUM
                 )
                 torch.distributed.all_reduce(
-                    perplexity, op=torch.distributed.ReduceOp.AVG
+                    step_count, op=torch.distributed.ReduceOp.SUM
                 )
+                torch.distributed.all_reduce(
+                    all_neg_log_probs, op=torch.distributed.ReduceOp.SUM
+                )
+                torch.distributed.all_reduce(
+                    tokens_count, op=torch.distributed.ReduceOp.SUM
+                )
+            avg_loss = (loss / torch.clamp_min(step_count, 1)).item()
+            perplexity = (
+                torch.exp(all_neg_log_probs / tokens_count).item()
+                if tokens_count.item() > 0
+                else float("inf")
+            )
         if self.is_master:
             logger.info(
                 f"Validation step {step}: avg_loss={avg_loss:.4f}, perplexity={perplexity:.4f}"
