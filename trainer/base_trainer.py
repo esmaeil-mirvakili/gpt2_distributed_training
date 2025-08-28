@@ -2,7 +2,7 @@ from abc import ABC
 from dataclasses import dataclass
 from typing import Optional, Literal
 import torch
-from loguru import logging
+from loguru import logger
 
 @dataclass
 class BaseTrainerConfig:

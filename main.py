@@ -12,6 +12,7 @@ from omegaconf import OmegaConf, MISSING
 from trainer.ddp_trainer import DDPTrainer, DDPTrainerConfig
 from trainer.fsdp_trainer import FSDPTrainer, FSDPTrainerConfig
 from trainer.base_trainer import BaseTrainer, BaseTrainerConfig
+from trainer.deepspeed_trainer import DeepSpeedTrainer, DeepSpeedTrainerConfig
 from models.gpt2 import GPT2Config
 
 
@@ -39,6 +40,11 @@ class FSDPConfig(TrainerConfig):
     _target_: str = "trainer.fsdp_trainer.FSDPTrainer"
     config: FSDPTrainerConfig = field(default_factory=FSDPTrainerConfig)
     
+@dataclass
+class DeepSpeedConfig(TrainerConfig):
+    _target_: str = "trainer.deepspeed_trainer.DeepSpeedTrainer"
+    config: DeepSpeedTrainerConfig = field(default_factory=DeepSpeedTrainerConfig)
+    
 
 @dataclass
 class Config:
@@ -52,6 +58,7 @@ cs = ConfigStore.instance()
 cs.store(name="schema", node=Config)
 cs.store(group="trainer", name="ddp", node=DDPConfig)
 cs.store(group="trainer", name="fsdp", node=FSDPConfig)
+cs.store(group="trainer", name="deepspeed", node=DeepSpeedConfig)
 
 @hydra.main(version_base="1.3", config_path="configs", config_name="config")
 def main(config: Config):
