@@ -11,6 +11,7 @@ import math
 from torch.nn import functional as F
 from dataclasses import dataclass, field
 from typing import Any, Dict
+import json
 
 
 @dataclass
@@ -122,22 +123,30 @@ class DeepSpeedTrainer(BaseTrainer):
 
         # Set matmul precision
         torch.set_float32_matmul_precision(self.config.matmul_precision)
-
+        self.train_dataset, self.val_dataset = self._prepare_datasets(train_dataset, val_dataset)
         self.checkpoint_strategy = instantiate(self.config.checkpoint_strategy)
         model = self._prepare_model(model)
         optimizer = self._prepare_optimizer()
         lr_scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=self._schedule_lr)
+        ds_config = json.loads(open(self.config.deepspeed_config, "r").read())
+        bs = self.train_dataset.batch_size
+        if "gradient_accumulation_steps" in ds_config:
+            grad_accum_steps = ds_config["gradient_accumulation_steps"]
+        else:
+            grad_accum_steps = 1
+        effective_batch_size = bs * grad_accum_steps * self.world_size
+        if "train_batch_size" not in ds_config:
+            ds_config["train_batch_size"] = effective_batch_size
         model_engine, optimizer, _, lr_scheduler = deepspeed.initialize(
             model=model,
             model_parameters=(p for p in model.parameters() if p.requires_grad),
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
-            config=self.config.deepspeed_config
+            config=ds_config
         )
         self.model = model_engine
         self.lr_scheduler = lr_scheduler
         self.optimizer = optimizer
-        self.train_dataset, self.val_dataset = self._prepare_datasets(train_dataset, val_dataset)
         if self.is_master:
             logger.info("Training configuration:")
             logger.info(f"Max steps: {self.config.max_steps}")

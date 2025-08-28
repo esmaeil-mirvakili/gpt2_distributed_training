@@ -5,7 +5,7 @@ config:
   seed: 42
   max_steps: 50
   val_steps: 10
-  grad_accumulation_steps: 4
+  grad_accumulation_steps: 8
   matmul_precision: high
   use_model_compile: true
   weight_decay: 0.1
