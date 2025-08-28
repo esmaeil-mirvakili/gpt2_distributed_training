@@ -9,11 +9,15 @@ from hydra.utils import instantiate
 from loguru import logger
 from omegaconf import OmegaConf, MISSING
 
-from trainer.ddp_trainer import DDPTrainer, DDPTrainerConfig
-from trainer.fsdp_trainer import FSDPTrainer, FSDPTrainerConfig
-from trainer.base_trainer import BaseTrainer, BaseTrainerConfig
-from trainer.deepspeed_trainer import DeepSpeedTrainer, DeepSpeedTrainerConfig
+from trainer.ddp_trainer import DDPTrainerConfig
+from trainer.deepspeed_trainer import DeepSpeedTrainerConfig
 from models.gpt2 import GPT2Config
+
+from packaging.version import parse as V  # pip install packaging
+import torch
+
+# Check if torch version is >= 2.7 for FSDP2
+_TORCH_GE_27 = V(torch.__version__.split("+", 1)[0]) >= V("2.7.0")
 
 
 def init_logger(path: str):
@@ -36,11 +40,6 @@ class DDPConfig(TrainerConfig):
     config: DDPTrainerConfig = field(default_factory=DDPTrainerConfig)
     
 @dataclass
-class FSDPConfig(TrainerConfig):
-    _target_: str = "trainer.fsdp_trainer.FSDPTrainer"
-    config: FSDPTrainerConfig = field(default_factory=FSDPTrainerConfig)
-    
-@dataclass
 class DeepSpeedConfig(TrainerConfig):
     _target_: str = "trainer.deepspeed_trainer.DeepSpeedTrainer"
     config: DeepSpeedTrainerConfig = field(default_factory=DeepSpeedTrainerConfig)
@@ -57,8 +56,17 @@ class Config:
 cs = ConfigStore.instance()
 cs.store(name="schema", node=Config)
 cs.store(group="trainer", name="ddp", node=DDPConfig)
-cs.store(group="trainer", name="fsdp", node=FSDPConfig)
 cs.store(group="trainer", name="deepspeed", node=DeepSpeedConfig)
+
+if _TORCH_GE_27:
+    from trainer.fsdp_trainer import FSDPTrainerConfig
+    @dataclass
+    class FSDPConfig(TrainerConfig):
+        _target_: str = "trainer.fsdp_trainer.FSDPTrainer"
+        config: FSDPTrainerConfig = field(default_factory=FSDPTrainerConfig)
+    cs.store(group="trainer", name="fsdp", node=FSDPConfig)
+else:
+    logger.warning("FSDP Trainer is only available for torch>=2.7, skipping FSDP config.")
 
 @hydra.main(version_base="1.3", config_path="configs", config_name="config")
 def main(config: Config):
