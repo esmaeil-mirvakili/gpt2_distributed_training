@@ -236,8 +236,13 @@ class DDPTrainer(BaseTrainer):
             * self.world_size
         ) / (t1 - t0)
         if self.is_master:
-            logger.info(
-                f"Step {step}: loss={_to_scalar(accumulated_loss):.4f} | norm: {_to_scalar(norm):.2f} | dt={elapsed:.2f}ms | tok/sec={tokens_per_sec:.2f}"
+            self._log_metrics(
+                {
+                    "loss": _to_scalar(accumulated_loss), 
+                    "norm": _to_scalar(norm), 
+                    "dt":elapsed, 
+                    "tok/sec":tokens_per_sec
+                }, step, prefix="train"
             )
 
     def _val_step(self, val_dataset, step):
@@ -276,8 +281,8 @@ class DDPTrainer(BaseTrainer):
                 else float("inf")
             )
         if self.is_master:
-            logger.info(
-                f"Validation step {step}: avg_loss={avg_loss:.4f}, perplexity={perplexity:.4f}"
+            self._log_metrics(
+                {"avg_loss": avg_loss, "perplexity": perplexity}, step, prefix="val"
             )
         if step != 0:
             self.checkpoint_strategy.save_checkpoint(

@@ -225,8 +225,13 @@ class DeepSpeedTrainer(BaseTrainer):
                     * self.model.gradient_accumulation_steps()
                     * self.world_size
                 ) / (t1 - self.t0)
-                logger.info(
-                    f"Step {step}: loss={avg_loss:.4f} | norm: {grad_norm:.2f} | dt={elapsed:.2f}ms | tok/sec={tokens_per_sec:.2f}"
+                self._log_metrics(
+                    {
+                        "loss": avg_loss, 
+                        "norm": grad_norm, 
+                        "dt":elapsed, 
+                        "tok/sec":tokens_per_sec
+                    }, step, prefix="train"
                 )
             self.accumulated_loss = 0
             self.micro_updates = 0
@@ -268,8 +273,8 @@ class DeepSpeedTrainer(BaseTrainer):
                 else float("inf")
             )
         if self.is_master:
-            logger.info(
-                f"Validation step {step}: avg_loss={avg_loss:.4f}, perplexity={perplexity:.4f}"
+            self._log_metrics(
+                {"avg_loss": avg_loss, "perplexity": perplexity}, step, prefix="val"
             )
         if step != 0:
             self.checkpoint_strategy.save_checkpoint(

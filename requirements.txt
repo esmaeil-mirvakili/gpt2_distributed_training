@@ -6,3 +6,4 @@ omegaconf
 loguru
 wandb
 deepspeed
+wandb
