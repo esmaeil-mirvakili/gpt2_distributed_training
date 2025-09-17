@@ -24,10 +24,10 @@ class BaseTrainer(ABC):
         self.device = device
         self.resume = resume
         self.config = config or BaseTrainerConfig()
-        os.environ.setdefault("WANDB_PROJECT", config.wandb.project)
+        os.environ.setdefault("WANDB_PROJECT", config.wandb_project)
         wandb.init(
-            project=config.wandb.project,
-            name=config.wandb.run_name,
+            project=config.wandb_project,
+            name=config.wandb_run_name,
         )
         wandb.define_metric("global_step")
         wandb.define_metric("*", step_metric="global_step")
