@@ -200,7 +200,7 @@ class DDPTrainer(BaseTrainer):
         t0 = time()
         self.model.train()
         self.optimizer.zero_grad()
-        accumulated_loss = torch.zeros(1, device=self.model.device)  # for logging
+        accumulated_loss = torch.zeros(1, device=self.device)  # for logging
         # gradient accumulation
         for micro_step in range(self.config.grad_accumulation_steps):
             x, y = next(train_dataset)
@@ -248,10 +248,10 @@ class DDPTrainer(BaseTrainer):
     def _val_step(self, val_dataset, step):
         self.model.eval()
         val_dataset.reset()
-        loss = torch.zeros(1, device=self.model.device)
-        step_count = torch.zeros(1, device=self.model.device)
-        all_neg_log_probs = torch.zeros(1, device=self.model.device)
-        tokens_count = torch.zeros(1, device=self.model.device)
+        loss = torch.zeros(1, device=self.device)
+        step_count = torch.zeros(1, device=self.device)
+        all_neg_log_probs = torch.zeros(1, device=self.device)
+        tokens_count = torch.zeros(1, device=self.device)
         with torch.no_grad():
             for x, y in val_dataset:
                 metrics = self._calculate_loss(x, y)
