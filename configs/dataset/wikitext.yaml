@@ -1,12 +1,12 @@
 train_dataset:
   _target_: data.data.DataLoaderLite
   data_root: /opt/ml/input/data/wikitext
-  batch_size: 4
-  seq_length: 256
+  batch_size: 8
+  seq_length: 1024
   split: train
 val_dataset:
   _target_: data.data.DataLoaderLite
   data_root: /opt/ml/input/data/wikitext
-  batch_size: 4
-  seq_length: 256
+  batch_size: 8
+  seq_length: 1024
   split: val

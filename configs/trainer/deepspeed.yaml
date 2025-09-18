@@ -3,8 +3,8 @@ device: cuda
 resume: null
 config:
   seed: 42
-  max_steps: 50
-  val_steps: 10
+  max_steps: 100000
+  val_steps: 100
   matmul_precision: high
   use_model_compile: true
   weight_decay: 0.1
